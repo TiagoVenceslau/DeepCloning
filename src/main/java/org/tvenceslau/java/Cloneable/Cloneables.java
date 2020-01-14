@@ -1,13 +1,9 @@
 package org.tvenceslau.java.Cloneable;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.List;
+import org.tvenceslau.java.Cloneable.Cloneable.UpdateSpecification;
+
+import java.lang.reflect.*;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -17,6 +13,7 @@ import static java.util.stream.Collectors.toCollection;
 public class Cloneables {
 
     private static final Pattern CLASS_COMPARE_PAT = Pattern.compile("^(.*?)(?:\\$\\d+)?$");
+    private static final Map<Class<?>, UpdateSpecification<?>> specMapCache = new HashMap<>();
 
     /**
      * Recursively perform a deep'ish copy of the provided {@param origin} into the
@@ -41,31 +38,32 @@ public class Cloneables {
         Object obj;
         Class<?> classType;
 
-        for (java.lang.reflect.Field field : fields)
-            if (!Modifier.isFinal(field.getModifiers()) && !Modifier.isPrivate(field.getModifiers())) //TODO: handle finals/privates? do I need to?
-                try {
+        for (Field field : fields) {
+            if (!field.isAccessible())
+                field.setAccessible(true);
 
-                    // If field is tagged as @NotToClone, then set it to the same obj
-                    if (field.isAnnotationPresent(Cloneable.NotToClone.class)) {
-                        field.set(destination, field.get(origin));
-                        continue;
-                    }
-
-                    classType = field.getType();
-
-                    if (((obj = field.get(origin)) != null) && Collection.class.isAssignableFrom(classType)) {
-                        field.set(destination, collectToList(((Collection) obj).stream()
-                                .map(Cloneables::handleSingleField), obj.getClass()));
-                    } else if (obj != null && field.isAnnotationPresent(Cloneable.ToClone.class)) {
-                        // for fields that must be cloned, but do not implement 'Cloneable'
-                        field.set(destination, customCloneField(obj, field.getAnnotation(Cloneable.ToClone.class)));
-                    } else {
-                        field.set(destination, handleSingleField(obj));
-                    }
-
-                } catch (IllegalAccessException e) {
-                    throw new UnsupportedOperationException(clazz.getSimpleName() + " copying went wrong. " + e.getMessage());
+            try {
+                if (field.isAnnotationPresent(Cloneable.NotToClone.class)) {
+                    field.set(destination, field.get(origin));
+                    continue;
                 }
+
+                classType = field.getType();
+
+                if (((obj = field.get(origin)) != null) && Collection.class.isAssignableFrom(classType)) {
+                    field.set(destination, collectToList(((Collection) obj).stream()
+                            .map(Cloneables::handleSingleField), obj.getClass()));
+                } else if (obj != null && field.isAnnotationPresent(Cloneable.ToClone.class)) {
+                    // for fields that must be cloned, but do not implement 'Cloneable'
+                    field.set(destination, customCloneField(obj, field.getAnnotation(Cloneable.ToClone.class)));
+                } else {
+                    field.set(destination, handleSingleField(obj));
+                }
+
+            } catch (IllegalAccessException e) {
+                throw new UnsupportedOperationException(clazz.getSimpleName() + " copying went wrong. " + e.getMessage());
+            }
+        }
 
         if (clazz.getSuperclass() != null)
             deepClone(clazz.getSuperclass(), origin, destination);
@@ -82,10 +80,11 @@ public class Cloneables {
      * This method calls an {@link Cloneable.ToClone} annotated method in the provided object
      * Part of the {@link Cloneable} functionality.
      * The annotated method will have to return an Object of the same class as the provided {@param obj} and take no parameters
+     *
      * @param obj An Object to be cloned via its {@link Cloneable.ToClone} annotated method
      * @return the clone of the object
      */
-    private static Object customCloneField(Object obj, Cloneable.ToClone annotation){
+    private static Object customCloneField(Object obj, Cloneable.ToClone annotation) {
         final List<Method> methods = new ArrayList<>();
         final Class<?> clazz = obj.getClass();
         final String methodName = annotation.method();
@@ -115,86 +114,81 @@ public class Cloneables {
 
     /**
      * Necessary because the getClass method returns an instance I guess and we can't compare it with the returnType
-     * even if they're the same, they'll always test false
+     * even if they're the same, they'll always test false.
+     * Could also use a split or something, but since the idea is to do this for big tree like structures recursively
+     * I chose the cache a single regexp
+     *
+     * Still wish I'd found a way around this...
+     *
      * @param clazz1 class
      * @param clazz2 class
      * @return true if they're the same class
      */
-    private static boolean compareClass(Class<?> clazz1, Class<?> clazz2){
+    private static boolean compareClass(Class<?> clazz1, Class<?> clazz2) {
         if (clazz1.equals(clazz2)) return true;
 
         final Matcher m1 = CLASS_COMPARE_PAT.matcher(clazz1.getName());
         final Matcher m2 = CLASS_COMPARE_PAT.matcher(clazz2.getName());
-        if (m1.matches() != m2.matches()) return false;
+        if (!m1.matches() || !m2.matches()) return false;
 
         return m1.group(1).equals(m2.group(1));
     }
 
     /**
-     * Updates {@link Field#name} according to it's provided index
-     * To the format: name -> name{@param separator}{@param index}
-     * <p>
-     * Does the same for {@link Field#forFieldName} if it's not null
+     * Updates @ToUpdate annotated {@link Field}s according to the provided {@link UpdateSpecification}
      *
-     * @param clazz     The entry class in the method. Should be originally called with {@param object}'s class
-     * @param object    The {@link Cloneable} component that contains the Fields to have their name changed
-     * @param separator A string to concatenate the index
-     * @param index     ...
-     * @param initialization    true when initializing components (the index will be applied between the name and the already existing ones)
-     *                          false when updating components (the index will be concatenated will the previous ones
-     *                          null when resetting (will return the property to its 'un-indexed' value)
-     *
-     * @param <T>       Any subclass of {@link SedrComponent} or a {@link SedrComponent} itself
-     * @throws IllegalArgumentException for a non-String {@link Cloneable.ToUpdate} annotated field
+     * @param clazz  The entry class in the method. Should be originally called with {@param object}'s class
+     * @param object The {@link Cloneable} component that contains the Fields to have their name changed
+     * @param index  The clone index (Optional if the {@link UpdateSpecification} doesn't use it
+     * @param <T>    ...
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public static <T> void updateFieldNames(Class<?> clazz, Cloneable<T> object, final String separator, final String index, final Boolean initialization) throws IllegalArgumentException {
+    public static <T> void update(Class<?> clazz, Cloneable<T> object, int index) {
         final Field[] fields = clazz.getDeclaredFields();
 
         Class<?> classType;
         Object obj;
-        for (java.lang.reflect.Field field : fields)
+        for (Field field : fields) {
+            if (!field.isAccessible())
+                field.setAccessible(true);
+
             if (!Modifier.isFinal(field.getModifiers()) && !Modifier.isPrivate(field.getModifiers())
                     && !field.isAnnotationPresent(Cloneable.NotToUpdate.class)) { // TODO: same as above
                 classType = field.getType();
                 try {
                     if (((obj = field.get(object)) != null) && Collection.class.isAssignableFrom(classType))
                         field.set(object, collectToList(((Collection) obj).stream()
-                                .map(f -> updateSingleField(f, null, separator, index, initialization)), obj.getClass()));
+                                .map(f -> updateSingleField(f, null, index)), obj.getClass()));
                     else
-                        field.set(object, updateSingleField(object, field, separator, index, initialization));
+                        field.set(object, updateSingleField(object, field, index));
 
                 } catch (IllegalAccessException e) {
                     throw new UnsupportedOperationException("Could not access inner properties. " + e.getMessage());
                 }
             }
+        }
 
         if (clazz.getSuperclass() != null)
-            updateFieldNames(clazz.getSuperclass(), object, separator, index, initialization);
+            update(clazz.getSuperclass(), object, index);
     }
 
     /**
      * Updates a Single field's value,
      * or,
      * if the {@param field} is null (handling list items via stream)
-     * if {@param obj} is {@link Cloneable}, call {@param obj}'s {@link Cloneable#updateSelfProperties(String, String, Boolean)}
+     * if {@param obj} is {@link Cloneable}, call {@param obj}'s {@link Cloneable#updateSelf(int)}
      * else return the {@param obj}
      *
-     * @param obj               Object that should have it's {@param field} updated
-     * @param field             {@link java.lang.reflect.Field} to be updated.
-     *                          <strong>MUST</strong> be null when acting on list items via Stream.
-     * @param separator         A string to concatenate the index
-     * @param index             ...
-     * @param initialization    true when initializing components (the index will be applied between the name and the already existing ones)
-     *                          false when updating components (the index will be concatenated will the previous ones
-     *                          null when resetting (will return the property to its 'un-indexed' value)
+     * @param obj   Object that should have it's {@param field} updated
+     * @param field {@link Field} to be updated.
+     *              <strong>MUST</strong> be null when acting on Collections via Streams.
      * @throws IllegalArgumentException when field to update ios not a String
      */
-    @SuppressWarnings("rawtypes")
-    private static Object updateSingleField(Object obj, Field field, final String separator, final String index, final Boolean initialization) throws IllegalArgumentException {
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static Object updateSingleField(Object obj, Field field, int index) {
         if (field == null) {  // this handles items inside Collections
             if (Cloneable.class.isAssignableFrom(obj.getClass()))
-                ((Cloneable) obj).updateSelfProperties(separator, index, initialization);
+                ((Cloneable) obj).updateSelf(index);
             return obj;
         }
 
@@ -208,91 +202,55 @@ public class Cloneables {
 
         if (originalProp != null && Cloneable.class.isAssignableFrom(originalProp.getClass())) {
             if (!field.isAnnotationPresent(Cloneable.NotToUpdate.class))
-                ((Cloneable) originalProp).updateSelfProperties(separator, index, initialization);
+                ((Cloneable) originalProp).updateSelf(index);
             return originalProp;
         }
 
         if (!field.isAnnotationPresent(Cloneable.ToUpdate.class))
             return originalProp;
 
-        if (!String.class.isAssignableFrom(field.getType()))
-            throw new IllegalArgumentException("Non-String objects can't be updated!\n" +
-                    "Source Object: " + obj + "\nfield: " + field);
+        final Cloneable.ToUpdate annotation = field.getAnnotation(Cloneable.ToUpdate.class);
 
-        final String originalValue = (String) originalProp;
+        final Cloneable.UpdateSpecification spec = getSpec(annotation.spec());
 
-        if (originalValue == null)
-            return null;
-
-        return updateIndex(originalValue,separator,index, initialization);
+        return updateProperty(originalProp, spec, index);
     }
 
     /**
-     * Updates the provided {@param property} according to:<br>
-     *     Example: for field named "S_II_1_2", separator "_INDEX_" and index "1", "2" and "3" respectively
-     *     <ul>
-     *         <li>"S_II_1_2" -> "S_II_1_2_INDEX_1"</li>
-     *         <li>"S_II_1_2_INDEX_1" -> "S_II_1_2_INDEX_2_INDEX_1"</li>
-     *         <li>"S_II_1_2_INDEX_2_INDEX_1" -> "S_II_1_2_INDEX_3_INDEX_2_INDEX_1"</li>
-     *     </ul>
-     *
-     * @param property          the String to be updated
-     * @param separator         the separator String to be used
-     *                          can be null when resetting values
-     * @param index             the index to be applied
-     *                          can be null when resetting values
-     * @param initialization    true when initializing a component
-     *                          false when updating values
-     *                          <strong>must be null when resetting values</strong>
-     *
-     * @return  the updated {@param property}
-     *
-     * @throws IllegalAccessError if the provided {@param property} doesn't contain the provided {@param separator}
-     *      and doesn't match the {@link SedrSectionComponent#SEPARATOR_PAT}
+     * Runs the provided {@link UpdateSpecification} and returns it
+     * @return the updated value
      */
-    private static String updateIndex(final String property, final String separator, final String index, final Boolean initialization) throws IllegalAccessError{
-        if (!property.contains(separator) && !property.contains(";")) {
-            if (initialization == null)
-                throw new IllegalArgumentException("Calling a reset on non previously updated properties");
-            return property + separator + index;
+    private static <T> T updateProperty(final T property, final UpdateSpecification<T> spec, int index) {
+        return spec.update(property, index);
+    }
+
+    /**
+     * Caches provided {@link UpdateSpecification} so you don't instantiate one for every cloning op
+     * @param clazz class of {@link UpdateSpecification}
+     * @param <T>   ...
+     * @return the cached Spec or a new one if none is cached while caching it
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> UpdateSpecification<?> getSpec(Class<T> clazz) {
+        if (!specMapCache.containsKey(clazz)) {
+            UpdateSpecification<T> spec;
+            try {
+                spec = (UpdateSpecification<T>) clazz.newInstance();
+                specMapCache.put(clazz, spec);
+            } catch (InstantiationException | IllegalAccessException e) {
+                throw new IllegalStateException("Could not get Specification");
+            }
         }
 
-        if (property.contains(";")){
-            // for meta_parents and meta_child on FieldOptions
-            String[] values = property.split(";");
-            StringBuilder sb = new StringBuilder();
-
-            for (int i = 0; i < values.length; i++) {
-                sb.append(updateIndex(values[i],separator,index,initialization));
-                if (i < values.length-1)
-                    sb.append(";");
-            }
-            return sb.toString();
-        }
-
-        final Matcher m = SedrSectionComponent.SEPARATOR_PAT.matcher(property);
-
-        if (m.find())
-            if (initialization == null) {
-                final Matcher m2 = SedrSectionComponent.ALL_BUT_LAST_SEPARATOR_PAT.matcher(property);
-                if (m2.find())
-                    return m2.group(1) + separator + index;
-            } else {
-                if (initialization) {
-                    return m.group(1) + separator + index + m.group(2);
-                } else {
-                    return property + separator + index;
-                }
-            }
-
-        throw new IllegalAccessError("Could not find groups");
+        return specMapCache.get(clazz);
     }
 
     /**
      * Method to collect all stream elements and collect them to the proper Implementation of {@link List}
-     * @param stream {@param S} object stream
+     *
+     * @param stream   {@param S} object stream
      * @param listType An implementation of {@link List}'s class
-     * @param <S> any type
+     * @param <S>      any type
      * @return The result of collecting all stream elements into a List<{@param S}> of the provided {@param listType}
      */
     private static <S> List<S> collectToList(Stream<S> stream, Class<?> listType) {

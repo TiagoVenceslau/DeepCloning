@@ -1,12 +1,12 @@
 package org.tvenceslau.java.Cloneable.MockDomain;
 
-import org.tvenceslau.java.Cloneable.Cloneable;
+import java.util.Objects;
 
 public class SimpleCompostMockObject extends MockObject {
 
+    @NotToUpdate
     private MockObject childObject;
 
-    @NotToUpdate
     private String immutableString = "THIS STRING WON'T CHANGE";
 
     public SimpleCompostMockObject(){}
@@ -27,15 +27,25 @@ public class SimpleCompostMockObject extends MockObject {
 
         SimpleCompostMockObject that = (SimpleCompostMockObject) o;
 
-        if (!childObject.equals(that.childObject)) return false;
-        return immutableString.equals(that.immutableString);
+        if (!Objects.equals(childObject, that.childObject)) return false;
+        return Objects.equals(immutableString, that.immutableString);
     }
 
     @Override
     public int hashCode() {
         int result = super.hashCode();
-        result = 31 * result + childObject.hashCode();
-        result = 31 * result + immutableString.hashCode();
+        result = 31 * result + (childObject != null ? childObject.hashCode() : 0);
+        result = 31 * result + (immutableString != null ? immutableString.hashCode() : 0);
         return result;
+    }
+
+    @Override
+    public String toString() {
+        return "SimpleCompostMockObject{" +
+                "childObject=" + childObject +
+                ", immutableString='" + immutableString + '\'' +
+                ", name='" + name + '\'' +
+                ", value=" + value +
+                '}';
     }
 }

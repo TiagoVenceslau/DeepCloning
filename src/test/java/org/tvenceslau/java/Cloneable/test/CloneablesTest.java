@@ -13,15 +13,35 @@ import java.util.List;
 public class CloneablesTest {
 
     @Test
-    public void testPlain(){
-        final MockObject original = generatePlain();
+    public void testCloneUpdate(){
+        for (MockObject o: generateObjectList()){
+            System.out.println("Cloning " + o);
+            final MockObject clone = o.cloneSelf();
+            Assert.assertNotSame(o, clone);
+            Assert.assertEquals(o, clone);
+            System.out.println("Upgrading " + clone);
+            clone.updateSelf(1);
+            System.out.println("Object after update: \n" + clone);
+            Assert.assertNotSame(o, clone);
+        };
+    }
 
-        final MockObject clone = original.cloneSelf();
+    @Test
+    public void testMockObjectCloning(){
+        generateObjectList().forEach(o -> {
+            System.out.println("Cloning " + o);
+            final MockObject clone = o.cloneSelf();
+            Assert.assertNotSame(o, clone);
+            Assert.assertEquals(o, clone);
+        });
+    }
 
-        Assert.assertNotSame(original, clone);
-        Assert.assertEquals(original, clone);
-
-
+    private List<MockObject> generateObjectList(){
+        return new ArrayList<MockObject>(){{
+            add(generatePlain());
+            add(generateSimpleCompost());
+            add(generateCompost());
+        }};
     }
 
     private MockObject generateCompost(){

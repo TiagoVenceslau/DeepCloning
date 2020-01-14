@@ -1,6 +1,7 @@
 package org.tvenceslau.java.Cloneable.MockDomain;
 
 import java.util.List;
+import java.util.Objects;
 
 public class CompostMockObject extends MockObject {
 
@@ -33,15 +34,26 @@ public class CompostMockObject extends MockObject {
 
         CompostMockObject that = (CompostMockObject) o;
 
-        if (!mockObjectList.equals(that.mockObjectList)) return false;
+        if (!Objects.equals(mockObjectList, that.mockObjectList))
+            return false;
         return mockEnum == that.mockEnum;
     }
 
     @Override
     public int hashCode() {
         int result = super.hashCode();
-        result = 31 * result + mockObjectList.hashCode();
-        result = 31 * result + mockEnum.hashCode();
+        result = 31 * result + (mockObjectList != null ? mockObjectList.hashCode() : 0);
+        result = 31 * result + (mockEnum != null ? mockEnum.hashCode() : 0);
         return result;
+    }
+
+    @Override
+    public String toString() {
+        return "CompostMockObject{" +
+                "mockObjectList=" + mockObjectList +
+                ", mockEnum=" + mockEnum +
+                ", name='" + name + '\'' +
+                ", value=" + value +
+                '}';
     }
 }
