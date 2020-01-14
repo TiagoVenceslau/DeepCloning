@@ -152,8 +152,7 @@ public class Cloneables {
             if (!field.isAccessible())
                 field.setAccessible(true);
 
-            if (!Modifier.isFinal(field.getModifiers()) && !Modifier.isPrivate(field.getModifiers())
-                    && !field.isAnnotationPresent(Cloneable.NotToUpdate.class)) { // TODO: same as above
+            if (!field.isAnnotationPresent(Cloneable.NotToUpdate.class)) {
                 classType = field.getType();
                 try {
                     if (((obj = field.get(object)) != null) && Collection.class.isAssignableFrom(classType))
